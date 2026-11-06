@@ -1,4 +1,4 @@
-#include <asm-generic/errno.h>
+#include <ctype.h>
 #include <cmark.h>
 #include <dirent.h>
 #include <errno.h>
@@ -8,6 +8,219 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+typedef struct {
+  char input_root[4096];
+  char output_root[4096];
+} Build;
+
+static int is_inside(const char *root, const char *path) {
+  size_t length = strlen(root);
+  return strcmp(root, "/") == 0 ||
+         (strncmp(root, path, length) == 0 &&
+          (path[length] == '/' || path[length] == '\0'));
+}
+
+/* Normalize an absolute filesystem path without requiring it to exist. */
+static int normalize_path(const char *path, char result[4096]) {
+  char copy[4096];
+  if (strlen(path) >= sizeof(copy) || path[0] != '/')
+    return 1;
+  strcpy(copy, path);
+  strcpy(result, "/");
+  char *save;
+  for (char *part = strtok_r(copy, "/", &save); part;
+       part = strtok_r(NULL, "/", &save)) {
+    if (strcmp(part, ".") == 0)
+      continue;
+    if (strcmp(part, "..") == 0) {
+      char *slash = strrchr(result, '/');
+      if (slash != result)
+        *slash = '\0';
+      else
+        result[1] = '\0';
+      continue;
+    }
+    size_t used = strlen(result);
+    int written = snprintf(result + used, 4096 - used, "%s%s",
+                           used > 1 ? "/" : "", part);
+    if (written < 0 || (size_t)written >= 4096 - used)
+      return 1;
+  }
+  return 0;
+}
+
+static int ensure_directory(const char *path) {
+  char copy[4096];
+  if (strlen(path) >= sizeof(copy))
+    return 1;
+  strcpy(copy, path);
+  for (char *cursor = copy + 1;; cursor++) {
+    if (*cursor != '/' && *cursor != '\0')
+      continue;
+    char saved = *cursor;
+    *cursor = '\0';
+    struct stat info;
+    if ((mkdir(copy, 0755) == -1 && errno != EEXIST) ||
+        stat(copy, &info) == -1 || !S_ISDIR(info.st_mode)) {
+      fprintf(stderr, "Cannot create directory: %s\n", copy);
+      return 1;
+    }
+    *cursor = saved;
+    if (saved == '\0')
+      return 0;
+  }
+}
+
+static int copy_asset(const char *source, const char *destination) {
+  char parent[4096];
+  strcpy(parent, destination);
+  *strrchr(parent, '/') = '\0';
+  if (ensure_directory(parent) != 0)
+    return 1;
+  struct stat source_info, destination_info;
+  if (stat(source, &source_info) == -1)
+    return 1;
+  if (stat(destination, &destination_info) == 0 &&
+      source_info.st_dev == destination_info.st_dev &&
+      source_info.st_ino == destination_info.st_ino) {
+    fprintf(stderr, "Source and destination are the same: %s\n", source);
+    return 1;
+  }
+  FILE *input = fopen(source, "rb");
+  if (!input) {
+    perror(source);
+    return 1;
+  }
+  FILE *output = fopen(destination, "wb");
+  if (!output) {
+    perror(destination);
+    fclose(input);
+    return 1;
+  }
+  char buffer[16384];
+  size_t count;
+  int failed = 0;
+  while ((count = fread(buffer, 1, sizeof(buffer), input)) > 0) {
+    if (fwrite(buffer, 1, count, output) != count) {
+      failed = 1;
+      break;
+    }
+  }
+  if (ferror(input))
+    failed = 1;
+  fclose(input);
+  if (fclose(output) == EOF)
+    failed = 1;
+  if (failed)
+    fprintf(stderr, "Could not copy %s to %s\n", source, destination);
+  return failed;
+}
+
+static int hex_value(unsigned char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+static int process_link(cmark_node *node, const char *input_path,
+                        const char *output_path, const Build *build) {
+  const char *url = cmark_node_get_url(node);
+  size_t path_length = strcspn(url, "?#");
+  /* Schemes, root-relative URLs, and fragment-only links are not files. */
+  if (!path_length || url[0] == '/' || memchr(url, ':', path_length))
+    return 0;
+  char decoded[4096];
+  size_t length = 0;
+  for (size_t i = 0; i < path_length; i++) {
+    unsigned char value = (unsigned char)url[i];
+    if (value == '%') {
+      if (i + 2 >= path_length)
+        return 1;
+      int high = hex_value((unsigned char)url[i + 1]);
+      int low = hex_value((unsigned char)url[i + 2]);
+      if (high < 0 || low < 0)
+        return 1;
+      value = (unsigned char)(high * 16 + low);
+      i += 2;
+    }
+    if (!value || length + 1 >= sizeof(decoded))
+      return 1;
+    decoded[length++] = (char)value;
+  }
+  decoded[length] = '\0';
+
+  char joined[8192], source[4096], destination[4096], resolved[4096];
+  size_t parent_length = (size_t)(strrchr(input_path, '/') - input_path);
+  snprintf(joined, sizeof(joined), "%.*s/%s", (int)parent_length,
+           input_path, decoded);
+  if (normalize_path(joined, source) ||
+      !is_inside(build->input_root, source) ||
+      !realpath(source, resolved) || !is_inside(build->input_root, resolved)) {
+    fprintf(stderr, "%s: missing or outside-input link: %s\n", input_path, url);
+    return 1;
+  }
+  struct stat info;
+  if (stat(source, &info) == -1 || !S_ISREG(info.st_mode)) {
+    fprintf(stderr, "%s: link is not a regular file: %s\n", input_path, url);
+    return 1;
+  }
+  if (is_inside(build->output_root, resolved)) {
+    fprintf(stderr, "%s: link points into generated output: %s\n", input_path, url);
+    return 1;
+  }
+
+  if (length >= 3 && strcmp(decoded + length - 3, ".md") == 0) {
+    /* Preserve the original URL encoding, query, and fragment. */
+    size_t encoded_stem = path_length;
+    for (int characters = 0; characters < 3; characters++) {
+      if (encoded_stem >= 3 && url[encoded_stem - 3] == '%')
+        encoded_stem -= 3;
+      else
+        encoded_stem--;
+    }
+    size_t size = encoded_stem + 5 + strlen(url + path_length) + 1;
+    char *rewritten = malloc(size);
+    if (!rewritten)
+      return 1;
+    snprintf(rewritten, size, "%.*s.html%s", (int)encoded_stem, url,
+             url + path_length);
+    int failed = !cmark_node_set_url(node, rewritten);
+    free(rewritten);
+    return failed;
+  }
+
+  parent_length = (size_t)(strrchr(output_path, '/') - output_path);
+  snprintf(joined, sizeof(joined), "%.*s/%s", (int)parent_length,
+           output_path, decoded);
+  if (normalize_path(joined, destination) ||
+      !is_inside(build->output_root, destination)) {
+    fprintf(stderr, "Link would copy outside output: %s\n", url);
+    return 1;
+  }
+  return copy_asset(source, destination);
+}
+
+static int process_links(cmark_node *document, const char *input_path,
+                         const char *output_path, const Build *build) {
+  cmark_iter *iterator = cmark_iter_new(document);
+  if (!iterator)
+    return 1;
+  int failed = 0;
+  cmark_event_type event;
+  while ((event = cmark_iter_next(iterator)) != CMARK_EVENT_DONE) {
+    if (event != CMARK_EVENT_ENTER)
+      continue;
+    cmark_node *node = cmark_iter_get_node(iterator);
+    cmark_node_type type = cmark_node_get_type(node);
+    if ((type == CMARK_NODE_LINK || type == CMARK_NODE_IMAGE) &&
+        process_link(node, input_path, output_path, build) != 0)
+      failed = 1;
+  }
+  cmark_iter_free(iterator);
+  return failed;
+}
 
 char *read_text_file(const char *path) {
   FILE *file = fopen(path, "rb");
@@ -118,7 +331,7 @@ int write_heading_text(FILE *file, cmark_node *node) {
 }
 
 int convert_file(const char *input_path, const char *output_path,
-                 const char *css) {
+                 const char *css, const Build *build) {
   FILE *markdown_file = fopen(input_path, "r");
   if (markdown_file == NULL) {
     perror(input_path);
@@ -137,6 +350,7 @@ int convert_file(const char *input_path, const char *output_path,
     return 1;
   }
 
+  int links_failed = process_links(document, input_path, output_path, build);
   char *html = cmark_render_html(document, CMARK_OPT_DEFAULT);
 
   if (html == NULL) {
@@ -206,10 +420,11 @@ int convert_file(const char *input_path, const char *output_path,
     return 1;
   }
 
-  return 0;
+  return links_failed;
 }
 
-int convert_directory(const char *input, const char *output, const char *css) {
+int convert_directory(const char *input, const char *output, const char *css,
+                      const Build *build) {
   DIR *d = opendir(input);
   if (d == NULL) {
     printf("Cannot open folder: %s\n", input);
@@ -269,6 +484,11 @@ int convert_directory(const char *input, const char *output, const char *css) {
       continue;
     }
 
+    char resolved_entry[4096];
+    if (realpath(input_path, resolved_entry) &&
+        is_inside(build->output_root, resolved_entry))
+      continue;
+
     if (info.st_dev == output_info.st_dev &&
         info.st_ino == output_info.st_ino) {
       continue;
@@ -287,7 +507,7 @@ int convert_directory(const char *input, const char *output, const char *css) {
         continue;
       }
 
-      if (convert_directory(input_path, child_output, css) != 0) {
+      if (convert_directory(input_path, child_output, css, build) != 0) {
         status = 1;
       }
       continue;
@@ -323,7 +543,7 @@ int convert_directory(const char *input, const char *output, const char *css) {
     // put input_path in console
     // puts(input_path);
 
-    if (convert_file(input_path, output_path, css) != 0) {
+    if (convert_file(input_path, output_path, css, build) != 0) {
       status = 1;
     }
   }
@@ -364,7 +584,33 @@ int main(int argc, char *argv[]) {
   if (css == NULL)
     return 1;
 
-  int status = convert_directory(input, output, css);
+  Build build;
+  char cwd[4096], joined[8192];
+  if (!realpath(input, build.input_root) || !getcwd(cwd, sizeof(cwd))) {
+    perror(input);
+    free(css);
+    return 1;
+  }
+  snprintf(joined, sizeof(joined), "%s/%s", output[0] == '/' ? "" : cwd,
+           output);
+  if (normalize_path(joined, build.output_root) ||
+      is_inside(build.output_root, build.input_root)) {
+    fprintf(stderr, "Output must not equal or contain the input directory\n");
+    free(css);
+    return 1;
+  }
+  if (ensure_directory(build.output_root) != 0 ||
+      !realpath(build.output_root, joined)) {
+    free(css);
+    return 1;
+  }
+  strcpy(build.output_root, joined);
+  if (is_inside(build.output_root, build.input_root)) {
+    fprintf(stderr, "Output must not equal or contain the input directory\n");
+    free(css);
+    return 1;
+  }
+  int status = convert_directory(build.input_root, build.output_root, css, &build);
 
   free(css);
   return status;
