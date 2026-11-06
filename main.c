@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #include <cmark.h>
 #include <dirent.h>
 #include <errno.h>
@@ -6,8 +7,54 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
-int convert_file(const char *input_path, const char *output_path) {
+char *read_text_file(const char *path) {
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
+    perror(path);
+    return NULL;
+  }
+
+  if (fseek(file, 0, SEEK_END) != 0) {
+    perror(path);
+    fclose(file);
+    return NULL;
+  }
+
+  long file_size = ftell(file);
+  if (file_size < 0) {
+    perror(path);
+    fclose(file);
+    return NULL;
+  }
+
+  rewind(file);
+
+  char *text = malloc((size_t)file_size + 1);
+  if (text == NULL) {
+    fprintf(stderr, "Could not allocate memory for %s\n", path);
+    fclose(file);
+    return NULL;
+  }
+
+  size_t bytes_read = fread(text, 1, (size_t)file_size, file);
+
+  if (ferror(file)) {
+    fprintf(stderr, "Could not read %s\n", path);
+    free(text);
+    fclose(file);
+    return NULL;
+  }
+
+  text[bytes_read] = '\0';
+
+  fclose(file);
+  return text;
+}
+
+int convert_file(const char *input_path, const char *output_path,
+                 const char *css) {
   FILE *markdown_file = fopen(input_path, "r");
   if (markdown_file == NULL) {
     perror(input_path);
@@ -41,7 +88,22 @@ int convert_file(const char *input_path, const char *output_path) {
     return 1;
   }
 
-  int write_failed = (fputs(html, output_file) == EOF);
+  int write_failed =
+      fprintf(output_file,
+              "<!doctype html>\n"
+              "<html lang=\"en\">\n"
+              "<head>\n"
+              "<meta charset=\"utf-8\">\n"
+              "<meta name=\"viewport\" "
+              "content=\"width=device-width, initial-scale=1\">\n"
+              "<title>Documentation</title>\n"
+              "<style>\n%s\n</style>\n"
+              "</head>\n"
+              "<body>\n"
+              "<main>\n%s\n</main>\n"
+              "</body>\n"
+              "</html>\n",
+              css, html) < 0;
 
   if (fclose(output_file) == EOF)
     write_failed = 1;
@@ -56,7 +118,7 @@ int convert_file(const char *input_path, const char *output_path) {
   return 0;
 }
 
-int convert_directory(const char *input, const char *output) {
+int convert_directory(const char *input, const char *output, const char *css) {
   DIR *d = opendir(input);
   if (d == NULL) {
     printf("Cannot open folder: %s\n", input);
@@ -64,33 +126,29 @@ int convert_directory(const char *input, const char *output) {
   }
 
   int status = 0;
+  int created_output = 0;
 
-  if (mkdir(output, 0755) == -1) {
-    if (errno != EEXIST) {
-      perror(output);
-      return 1;
-    }
-
-    struct stat info;
-
-    if (stat(output, &info) == -1) {
-      perror(output);
-      return 1;
-    }
-
-    if (!S_ISDIR(info.st_mode)) {
-      fprintf(stderr, "%s is not a directory\n", output);
-      return 1;
-    }
+  if (mkdir(output, 0755) == 0) {
+    created_output = 1;
+  } else if (errno != EEXIST) {
+    perror(output);
+    closedir(d);
+    return 1;
   }
 
   struct stat output_info;
 
   if (stat(output, &output_info) == -1) {
     perror(output);
+    closedir(d);
     return 1;
   }
 
+  if (!S_ISDIR(output_info.st_mode)) {
+    fprintf(stderr, "%s is not a directory\n", output);
+    closedir(d);
+    return 1;
+  }
   struct dirent *e;
   // loop all files in input dir
   while ((e = readdir(d)) != NULL) {
@@ -115,14 +173,14 @@ int convert_directory(const char *input, const char *output) {
     struct stat info;
 
     if (lstat(input_path, &info) == -1) {
-        perror(input_path);
-        status = 1;
-        continue;
+      perror(input_path);
+      status = 1;
+      continue;
     }
 
     if (info.st_dev == output_info.st_dev &&
         info.st_ino == output_info.st_ino) {
-        continue;
+      continue;
     }
 
     // check if entry is directory
@@ -138,7 +196,7 @@ int convert_directory(const char *input, const char *output) {
         continue;
       }
 
-      if (convert_directory(input_path, child_output) != 0) {
+      if (convert_directory(input_path, child_output, css) != 0) {
         status = 1;
       }
       continue;
@@ -174,12 +232,21 @@ int convert_directory(const char *input, const char *output) {
     // put input_path in console
     // puts(input_path);
 
-    if (convert_file(input_path, output_path) != 0) {
+    if (convert_file(input_path, output_path, css) != 0) {
       status = 1;
     }
   }
 
   closedir(d);
+
+  if (created_output) {
+    if (rmdir(output) == -1) {
+      if (errno != ENOTEMPTY && errno != EEXIST) {
+        perror(output);
+        status = 1;
+      }
+    }
+  }
 
   return status;
 }
@@ -201,5 +268,13 @@ int main(int argc, char *argv[]) {
     output = argv[2];
   }
 
-  return convert_directory(input, output);
+  char *css = read_text_file("./marx.min.css");
+
+  if (css == NULL)
+    return 1;
+
+  int status = convert_directory(input, output, css);
+
+  free(css);
+  return status;
 }
