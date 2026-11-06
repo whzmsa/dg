@@ -8,20 +8,20 @@ Requires libcmark and its development headers.
 I'm new to C so I mostly have no clue what I'm doing. Maybe this is not the best dev run command.
 
 ```bash
-gcc -Wall -Wextra -g main.c -o main -lcmark
+gcc -Wall -Wextra -g dg.c -o dg -lcmark
 ```
 
 # Usage
 
 ```text
-./main [INPUT_DIR [OUTPUT_DIR [CSS_FILE]]]
+./dg [INPUT_DIR [OUTPUT_DIR [CSS_FILE]]]
 ```
 
 Defaults to the current directory and `output`. CSS is optional.
 
 ```bash
-./main input output marx.min.css
-./main --help
+./dg input output marx.min.css
+./dg --help
 ```
 
 # LICENSE
