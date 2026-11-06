@@ -53,6 +53,70 @@ char *read_text_file(const char *path) {
   return text;
 }
 
+cmark_node *find_title_heading(cmark_node *node) {
+  if (cmark_node_get_type(node) == CMARK_NODE_HEADING &&
+      cmark_node_get_heading_level(node) == 1) {
+    return node;
+  }
+
+  for (cmark_node *child = cmark_node_first_child(node); child != NULL;
+       child = cmark_node_next(child)) {
+    cmark_node *found = find_title_heading(child);
+
+    if (found != NULL)
+      return found;
+  }
+  return NULL;
+}
+
+int write_escaped(FILE *file, const char *text, size_t length) {
+  for (size_t i = 0; i < length; i++) {
+    const char *replacement = NULL;
+
+    switch (text[i]) {
+    case '&':
+      replacement = "&amp;";
+      break;
+    case '<':
+      replacement = "&lt;";
+      break;
+    case '>':
+      replacement = "&gt;";
+      break;
+    }
+
+    if (replacement != NULL) {
+      if (fputs(replacement, file) == EOF)
+        return 1;
+    } else if (fputc((unsigned char)text[i], file) == EOF) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+int write_heading_text(FILE *file, cmark_node *node) {
+  cmark_node_type type = cmark_node_get_type(node);
+
+  if (type == CMARK_NODE_TEXT || type == CMARK_NODE_CODE) {
+    const char *text = cmark_node_get_literal(node);
+    return write_escaped(file, text, strlen(text));
+  }
+
+  if (type == CMARK_NODE_SOFTBREAK || type == CMARK_NODE_LINEBREAK) {
+    return fputc(' ', file) == EOF;
+  }
+
+  for (cmark_node *child = cmark_node_first_child(node); child != NULL;
+       child = cmark_node_next(child)) {
+    if (write_heading_text(file, child) != 0)
+      return 1;
+  }
+
+  return 0;
+}
+
 int convert_file(const char *input_path, const char *output_path,
                  const char *css) {
   FILE *markdown_file = fopen(input_path, "r");
@@ -74,36 +138,63 @@ int convert_file(const char *input_path, const char *output_path,
   }
 
   char *html = cmark_render_html(document, CMARK_OPT_DEFAULT);
-  cmark_node_free(document);
 
   if (html == NULL) {
     fprintf(stderr, "Could not render %s\n", input_path);
+    cmark_node_free(document);
+
     return 1;
   }
 
   FILE *output_file = fopen(output_path, "w");
   if (output_file == NULL) {
     perror(output_path);
+
     free(html);
+    cmark_node_free(document);
+
     return 1;
   }
 
   int write_failed =
-      fprintf(output_file,
-              "<!doctype html>\n"
-              "<html lang=\"en\">\n"
-              "<head>\n"
-              "<meta charset=\"utf-8\">\n"
-              "<meta name=\"viewport\" "
-              "content=\"width=device-width, initial-scale=1\">\n"
-              "<title>Documentation</title>\n"
+      fprintf(output_file, "<!doctype html>\n"
+                           "<html lang=\"en\">\n"
+                           "<head>\n"
+                           "<meta charset=\"utf-8\">\n"
+                           "<meta name=\"viewport\" "
+                           "content=\"width=device-width, initial-scale=1\">\n"
+                           "<title>") < 0;
+
+  cmark_node *heading = find_title_heading(document);
+
+  if (heading != NULL) {
+    if (write_heading_text(output_file, heading) != 0)
+      write_failed = 1;
+  } else {
+    const char *filename = strrchr(input_path, '/');
+    filename = filename != NULL ? filename + 1 : input_path;
+    size_t length = strlen(filename);
+
+    if (length >= 3 && strcmp(filename + length - 3, ".md") == 0)
+      length -= 3;
+
+    if (write_escaped(output_file, filename, length) != 0)
+      write_failed = 1;
+  }
+
+  if (fprintf(output_file,
+              "</title>\n"
               "<style>\n%s\n</style>\n"
               "</head>\n"
               "<body>\n"
               "<main>\n%s\n</main>\n"
               "</body>\n"
               "</html>\n",
-              css, html) < 0;
+              css, html) < 0) {
+    write_failed = 1;
+  }
+
+  cmark_node_free(document);
 
   if (fclose(output_file) == EOF)
     write_failed = 1;
