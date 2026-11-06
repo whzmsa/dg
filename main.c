@@ -1,6 +1,7 @@
 #include <cmark.h>
 #include <dirent.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,8 +42,8 @@ static int normalize_path(const char *path, char result[4096]) {
       continue;
     }
     size_t used = strlen(result);
-    int written = snprintf(result + used, 4096 - used, "%s%s",
-                           used > 1 ? "/" : "", part);
+    int written =
+        snprintf(result + used, 4096 - used, "%s%s", used > 1 ? "/" : "", part);
     if (written < 0 || (size_t)written >= 4096 - used)
       return 1;
   }
@@ -117,9 +118,12 @@ static int copy_asset(const char *source, const char *destination) {
 }
 
 static int hex_value(unsigned char value) {
-  if (value >= '0' && value <= '9') return value - '0';
-  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  if (value >= '0' && value <= '9')
+    return value - '0';
+  if (value >= 'a' && value <= 'f')
+    return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F')
+    return value - 'A' + 10;
   return -1;
 }
 
@@ -152,10 +156,9 @@ static int process_link(cmark_node *node, const char *input_path,
 
   char joined[8192], source[4096], destination[4096], resolved[4096];
   size_t parent_length = (size_t)(strrchr(input_path, '/') - input_path);
-  snprintf(joined, sizeof(joined), "%.*s/%s", (int)parent_length,
-           input_path, decoded);
-  if (normalize_path(joined, source) ||
-      !is_inside(build->input_root, source) ||
+  snprintf(joined, sizeof(joined), "%.*s/%s", (int)parent_length, input_path,
+           decoded);
+  if (normalize_path(joined, source) || !is_inside(build->input_root, source) ||
       !realpath(source, resolved) || !is_inside(build->input_root, resolved)) {
     fprintf(stderr, "%s: missing or outside-input link: %s\n", input_path, url);
     return 1;
@@ -166,7 +169,8 @@ static int process_link(cmark_node *node, const char *input_path,
     return 1;
   }
   if (is_inside(build->output_root, resolved)) {
-    fprintf(stderr, "%s: link points into generated output: %s\n", input_path, url);
+    fprintf(stderr, "%s: link points into generated output: %s\n", input_path,
+            url);
     return 1;
   }
 
@@ -191,8 +195,8 @@ static int process_link(cmark_node *node, const char *input_path,
   }
 
   parent_length = (size_t)(strrchr(output_path, '/') - output_path);
-  snprintf(joined, sizeof(joined), "%.*s/%s", (int)parent_length,
-           output_path, decoded);
+  snprintf(joined, sizeof(joined), "%.*s/%s", (int)parent_length, output_path,
+           decoded);
   if (normalize_path(joined, destination) ||
       !is_inside(build->output_root, destination)) {
     fprintf(stderr, "Link would copy outside output: %s\n", url);
@@ -395,6 +399,7 @@ int convert_file(const char *input_path, const char *output_path,
       write_failed = 1;
   }
 
+  if (css != NULL) {
   if (fprintf(output_file,
               "</title>\n"
               "<style>\n%s\n</style>\n"
@@ -405,6 +410,18 @@ int convert_file(const char *input_path, const char *output_path,
               "</html>\n",
               css, html) < 0) {
     write_failed = 1;
+  }
+  } else {
+      if (fprintf(output_file,
+                  "</title>\n"
+                  "</head>\n"
+                  "<body>\n"
+                  "<main>\n%s\n</main>\n"
+                  "</body>\n"
+                  "</html>\n",
+                  html) < 0) {
+        write_failed = 1;
+      }
   }
 
   cmark_node_free(document);
@@ -561,27 +578,53 @@ int convert_directory(const char *input, const char *output, const char *css,
   return status;
 }
 
+static void print_usage(FILE *stream, const char *program) {
+  fprintf(stream,
+          "Usage: %s [INPUT_DIR [OUTPUT_DIR [CSS_FILE]]]\n"
+          "       %s -h | --help\n"
+          "\n"
+          "Generate HTML documentation from Markdown files recursively.\n"
+          "\n"
+          "Arguments:\n"
+          "  INPUT_DIR   Directory containing Markdown files (default: .)\n"
+          "  OUTPUT_DIR  Directory for generated HTML (default: output)\n"
+          "  CSS_FILE    Optional stylesheet to embed in each HTML page\n"
+          "\n"
+          "Options:\n"
+          "  -h, --help  Show this help and exit\n"
+          "\n"
+          "Relative paths are resolved from the current working directory.\n"
+          "\n"
+          "Examples:\n"
+          "  %s\n"
+          "  %s docs public\n"
+          "  %s docs public marx.min.css\n",
+          program, program, program, program, program);
+}
+
 int main(int argc, char *argv[]) {
-  const char *input;
-  const char *output;
-  if (argc < 2) {
-    printf("No directory specified. Using \".\"\n");
-    input = ".";
-  } else {
-    input = argv[1];
-  }
-  // if output arg not specified use output
-  if (argc != 3) {
-    printf("No output directory specified. Using \"./output\"\n");
-    output = "output";
-  } else {
-    output = argv[2];
+  if (argc == 2 &&
+      (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
+    print_usage(stdout, argv[0]);
+    return 0;
   }
 
-  char *css = read_text_file("./marx.min.css");
-
-  if (css == NULL)
+  if (argc > 4) {
+    fprintf(stderr, "Too many arguments.\n\n");
+    print_usage(stderr, argv[0]);
     return 1;
+  }
+
+  const char *input = argc >= 2 ? argv[1] : ".";
+  const char *output = argc >= 3 ? argv[2] : "output";
+  char *css = NULL;
+
+  if (argc >= 4) {
+    css = read_text_file(argv[3]);
+    if (css == NULL) {
+      return 1;
+    }
+  }
 
   Build build;
   char cwd[4096], joined[8192];
@@ -609,7 +652,8 @@ int main(int argc, char *argv[]) {
     free(css);
     return 1;
   }
-  int status = convert_directory(build.input_root, build.output_root, css, &build);
+  int status =
+      convert_directory(build.input_root, build.output_root, css, &build);
 
   free(css);
   return status;
