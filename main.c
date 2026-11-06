@@ -1,4 +1,3 @@
-#include <ctype.h>
 #include <cmark.h>
 #include <dirent.h>
 #include <errno.h>
