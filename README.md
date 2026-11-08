@@ -1,6 +1,8 @@
 # dg
 > (d)ocumentation (g)enerator generates docs from markdown
 
+![dg screenshot](.whz/screenshot.webp)
+
 # Build
 
 Requires libcmark and its development headers.
