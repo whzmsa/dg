@@ -12,6 +12,7 @@
 typedef struct {
   char input_root[4096];
   char output_root[4096];
+  bool no_index;
 } Build;
 
 static int is_inside(const char *root, const char *path) {
@@ -400,28 +401,28 @@ int convert_file(const char *input_path, const char *output_path,
   }
 
   if (css != NULL) {
-  if (fprintf(output_file,
-              "</title>\n"
-              "<style>\n%s\n</style>\n"
-              "</head>\n"
-              "<body>\n"
-              "<main>\n%s\n</main>\n"
-              "</body>\n"
-              "</html>\n",
-              css, html) < 0) {
-    write_failed = 1;
-  }
+    if (fprintf(output_file,
+                "</title>\n"
+                "<style>\n%s\n</style>\n"
+                "</head>\n"
+                "<body>\n"
+                "<main>\n%s\n</main>\n"
+                "</body>\n"
+                "</html>\n",
+                css, html) < 0) {
+      write_failed = 1;
+    }
   } else {
-      if (fprintf(output_file,
-                  "</title>\n"
-                  "</head>\n"
-                  "<body>\n"
-                  "<main>\n%s\n</main>\n"
-                  "</body>\n"
-                  "</html>\n",
-                  html) < 0) {
-        write_failed = 1;
-      }
+    if (fprintf(output_file,
+                "</title>\n"
+                "</head>\n"
+                "<body>\n"
+                "<main>\n%s\n</main>\n"
+                "</body>\n"
+                "</html>\n",
+                html) < 0) {
+      write_failed = 1;
+    }
   }
 
   cmark_node_free(document);
@@ -545,6 +546,7 @@ int convert_directory(const char *input, const char *output, const char *css,
 
     char output_path[4096];
 
+    // TODO: fix typo
     int writte_output =
         snprintf(output_path, sizeof(output_path), "%s/%.*s.html", output,
                  (int)(length - 3), e->d_name);
@@ -561,6 +563,17 @@ int convert_directory(const char *input, const char *output, const char *css,
 
     if (convert_file(input_path, output_path, css, build) != 0) {
       status = 1;
+    } else if (!build->no_index && strcmp(e->d_name, "README.md") == 0) {
+        char index_path[4096];
+
+        int written = snprintf(index_path, sizeof(index_path), "%s/index.html", output);
+
+        if (writte_output < 0 || (size_t)written >=sizeof(index_path)) {
+            fprintf(stderr, "Index path is too long\n");
+            status = 1;
+        } else if (copy_asset(output_path, index_path) != 0) {
+            status = 1;
+        }
     }
   }
 
@@ -592,6 +605,7 @@ static void print_usage(FILE *stream, const char *program) {
           "\n"
           "Options:\n"
           "  -h, --help  Show this help and exit\n"
+          "  --no-index  Disable copying README.md to index.html and README.html\n"
           "\n"
           "Relative paths are resolved from the current working directory.\n"
           "\n"
@@ -603,30 +617,40 @@ static void print_usage(FILE *stream, const char *program) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc == 2 &&
-      (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
-    print_usage(stdout, argv[0]);
-    return 0;
-  }
+  bool no_index = false;
+  const char *paths[3];
+  int path_count = 0;
 
-  if (argc > 4) {
-    fprintf(stderr, "Too many arguments.\n\n");
-    print_usage(stderr, argv[0]);
-    return 1;
-  }
-
-  const char *input = argc >= 2 ? argv[1] : ".";
-  const char *output = argc >= 3 ? argv[2] : "output";
-  char *css = NULL;
-
-  if (argc >= 4) {
-    css = read_text_file(argv[3]);
-    if (css == NULL) {
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--no-index") == 0) {
+      no_index = true;
+    } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      print_usage(stdout, argv[0]);
+      return 0;
+    } else if (argv[i][0] == '-') {
+      fprintf(stderr, "Unknown option: %s\n", argv[i]);
       return 1;
+    } else {
+      if (path_count == 3) {
+        fprintf(stderr, "Too many directory or file arguments.\n");
+        return 1;
+      }
+      paths[path_count++] = argv[i];
     }
   }
 
+  const char *input = path_count >= 1 ? paths[0] : ".";
+  const char *output = path_count >= 2 ? paths[1] : "output";
+  char *css = NULL;
+
+  if (path_count >= 3) {
+    css = read_text_file(paths[2]);
+    if (css == NULL)
+      return 1;
+  }
+
   Build build;
+  build.no_index = no_index;
   char cwd[4096], joined[8192];
   if (!realpath(input, build.input_root) || !getcwd(cwd, sizeof(cwd))) {
     perror(input);
