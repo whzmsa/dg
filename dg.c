@@ -547,11 +547,11 @@ int convert_directory(const char *input, const char *output, const char *css,
     char output_path[4096];
 
     // TODO: fix typo
-    int writte_output =
+    int write_output =
         snprintf(output_path, sizeof(output_path), "%s/%.*s.html", output,
                  (int)(length - 3), e->d_name);
 
-    if (writte_output < 0 || (size_t)writte_output >= sizeof(output_path)) {
+    if (write_output < 0 || (size_t)write_output >= sizeof(output_path)) {
       fprintf(stderr, "Output path is too long: %s\n", e->d_name);
       continue;
     }
@@ -568,7 +568,7 @@ int convert_directory(const char *input, const char *output, const char *css,
 
         int written = snprintf(index_path, sizeof(index_path), "%s/index.html", output);
 
-        if (writte_output < 0 || (size_t)written >=sizeof(index_path)) {
+        if (write_output < 0 || (size_t)written >=sizeof(index_path)) {
             fprintf(stderr, "Index path is too long\n");
             status = 1;
         } else if (copy_asset(output_path, index_path) != 0) {
