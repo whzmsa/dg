@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dg</title>
+</head>
+<body>
+<main>
+<h1>dg</h1>
+<blockquote>
+<p>(d)ocumentation (g)enerator generates docs from markdown</p>
+</blockquote>
+<h1>Build</h1>
+<p>Requires libcmark and its development headers.</p>
+<p>I'm new to C so I mostly have no clue what I'm doing. Maybe this is not the best dev run command.</p>
+<pre><code class="language-bash">gcc -Wall -Wextra -g dg.c -o dg -lcmark
+</code></pre>
+<h1>Usage</h1>
+<pre><code class="language-text">./dg [INPUT_DIR [OUTPUT_DIR [CSS_FILE]]]
+</code></pre>
+<p>Defaults to the current directory and <code>output</code>. CSS is optional.</p>
+<pre><code class="language-bash">./dg input output marx.min.css
+./dg --help
+</code></pre>
+<h1>LICENSE</h1>
+<p><a href="LICENSE">MIT</a></p>
+
+</main>
+</body>
+</html>
