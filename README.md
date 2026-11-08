@@ -1,7 +1,7 @@
 # dg
 > (d)ocumentation (g)enerator generates docs from markdown
 
-![dg screenshot](.whz/screenshot.webp)
+![dg screenshot](https://raw.githubusercontent.com/whzmsa/dg/5c4345ebaa5dc657ab9bca79cc2ec44b744343d2/.whz/screenshot.webp)
 
 # Build
 
