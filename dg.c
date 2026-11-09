@@ -12,6 +12,7 @@
 typedef struct {
   char input_root[4096];
   char output_root[4096];
+  bool in_place;
   bool no_index;
 } Build;
 
@@ -85,8 +86,7 @@ static int copy_asset(const char *source, const char *destination) {
   if (stat(destination, &destination_info) == 0 &&
       source_info.st_dev == destination_info.st_dev &&
       source_info.st_ino == destination_info.st_ino) {
-    fprintf(stderr, "Source and destination are the same: %s\n", source);
-    return 1;
+    return 0;
   }
   FILE *input = fopen(source, "rb");
   if (!input) {
@@ -169,7 +169,7 @@ static int process_link(cmark_node *node, const char *input_path,
     fprintf(stderr, "%s: link is not a regular file: %s\n", input_path, url);
     return 1;
   }
-  if (is_inside(build->output_root, resolved)) {
+  if (!build->in_place && is_inside(build->output_root, resolved)) {
     fprintf(stderr, "%s: link points into generated output: %s\n", input_path,
             url);
     return 1;
@@ -502,7 +502,7 @@ int convert_directory(const char *input, const char *output, const char *css,
     }
 
     char resolved_entry[4096];
-    if (realpath(input_path, resolved_entry) &&
+    if (!build->in_place && realpath(input_path, resolved_entry) &&
         is_inside(build->output_root, resolved_entry))
       continue;
 
@@ -660,8 +660,9 @@ int main(int argc, char *argv[]) {
   snprintf(joined, sizeof(joined), "%s/%s", output[0] == '/' ? "" : cwd,
            output);
   if (normalize_path(joined, build.output_root) ||
-      is_inside(build.output_root, build.input_root)) {
-    fprintf(stderr, "Output must not equal or contain the input directory\n");
+      (strcmp(build.output_root, build.input_root) != 0 &&
+       is_inside(build.output_root, build.input_root))) {
+    fprintf(stderr, "Output must not contain the input directory\n");
     free(css);
     return 1;
   }
@@ -671,8 +672,9 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   strcpy(build.output_root, joined);
-  if (is_inside(build.output_root, build.input_root)) {
-    fprintf(stderr, "Output must not equal or contain the input directory\n");
+  build.in_place = strcmp(build.output_root, build.input_root) == 0;
+  if (!build.in_place && is_inside(build.output_root, build.input_root)) {
+    fprintf(stderr, "Output must not contain the input directory\n");
     free(css);
     return 1;
   }

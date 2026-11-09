@@ -26,5 +26,11 @@ Defaults to the current directory and `output`. CSS is optional.
 ./dg --help
 ```
 
+Use the same input and output directory to generate HTML alongside the Markdown files:
+
+```bash
+./dg docs docs marx.min.css
+```
+
 # LICENSE
 [MIT](LICENSE)
