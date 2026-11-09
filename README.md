@@ -5,12 +5,12 @@
 
 # Build
 
-Requires libcmark and its development headers.
+Requires libcmark, its development headers, and static libraries for libcmark and libc.
 
 I'm new to C so I mostly have no clue what I'm doing. Maybe this is not the best dev run command.
 
 ```bash
-gcc -Wall -Wextra -g dg.c -o dg -lcmark
+gcc -Wall -Wextra -g -static dg.c -o dg -lcmark
 ```
 
 # Usage
